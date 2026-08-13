@@ -1,11 +1,13 @@
 # OpenHost Health Producer for Garmin
 
-This application implements a producer for the OpenHost health data spec from Garmin devices. The Garmin API itself is locked behind a developer application portal, so data is extracted using GarminDB.
-
+This application implements a producer for the OpenHost health data spec from
+Garmin devices. The Garmin API itself is locked behind a developer application
+portal, so data is extracted using python-garminconnect.
 
 ## Important References
 - OpenHost Health Data service spec: https://github.com/imbue-openhost/health-data-service-spec
-- GarminDB: https://github.com/tcgoetz/GarminDB
+- python-garminconnect (unofficial API): https://github.com/cyberjunky/python-garminconnect
+- GarminDB (alternative API): https://github.com/tcgoetz/GarminDB
 
 ## Development Commands
 
@@ -21,7 +23,7 @@ Always run these exact commands for project tasks:
 
 Follow these precise rules when writing or modifying code:
 - **Language & Framework:** Use Python.
-- **Formatting:** Enforce 2-space indentation, semicolons, and single quotes.
+- **Formatting:** Enforce 2-space indentation, semicolons, and single quotes. Max 80 characters per line.
 - **Exports:** Always use named exports rather than default exports.
 - **Styling:** Use Tailwind CSS utility classes; avoid inline styles or CSS modules.
 
