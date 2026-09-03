@@ -1,13 +1,13 @@
-# OpenHost Health Producer for Garmin
+# Cloud in a Bottle Health Producer for Garmin
 
-This application implements a producer for the OpenHost health data spec from
-Garmin devices. The Garmin API itself is locked behind a developer application
-portal, so data is extracted using python-garminconnect.
+This application implements a producer for the Cloud in a Bottle health data
+spec from Garmin devices. The Garmin API itself is locked behind a developer
+application portal, so data is extracted using GarminDB.
 
 ## Important References
-- OpenHost Health Data service spec: https://github.com/imbue-openhost/health-data-service-spec
-- python-garminconnect (unofficial API): https://github.com/cyberjunky/python-garminconnect
-- GarminDB (alternative API): https://github.com/tcgoetz/GarminDB
+- Cloud in a Bottle Health Data service spec: https://github.com/cloud-in-a-bottle/health-data-service-spec
+- Cloud in a Bottle - Creating an App: https://cloudinabottle.org/docs/creating_an_app/overview.html
+- GarminDB: https://github.com/tcgoetz/GarminDB
 
 ## Development Commands
 
