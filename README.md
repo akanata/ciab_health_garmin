@@ -1,6 +1,7 @@
 # Cloud in a Bottle Garmin Health Producer
 
-This repo contains a Cloud in a Bottle health data producer for Garmin Connect devices (currently only smartwatches).
+This repo contains a Cloud in a Bottle health data producer for Garmin Connect
+devices (currently only smartwatches).
 
 # Roadmap
 
