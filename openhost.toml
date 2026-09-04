@@ -1,0 +1,35 @@
+[app]
+name = "garmin-health"
+version = "0.1.0"
+description = "Serves Garmin Connect health data over the Cloud in a Bottle health-data service"
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[routing]
+health_check = "/health"
+# No public_paths. /setup stays behind the router's owner gate (and is guarded
+# in-app by X-OpenHost-Is-Owner as well), and /v1/* is reached through the
+# router's internal service proxy rather than as external browser traffic.
+public_paths = []
+
+[resources]
+# GarminDB parses FIT files in-process; the import step is the memory peak.
+memory_mb = 1024
+cpu_cores = 0.5
+
+[data]
+# Holds GarminConnectConfig.json, garmin_tokens.json, the downloaded JSON/FIT
+# corpus, and the GarminDB SQLite files. Losing this re-prompts for MFA and
+# re-downloads years of data.
+app_data = true
+
+[[services.v2.provides]]
+# Deliberately the pre-rename "imbue-openhost" string: the spec's own client
+# hardcodes it as SERVICE_URL even on the cloud-in-a-bottle repo's main, and the
+# router matches a provider's service string against the consumer's. Declaring the
+# cloud-in-a-bottle URL here would mean no consumer ever routes to us.
+service = "github.com/imbue-openhost/health-data-service-spec"
+version = "0.1.0"
+endpoint = "/v1/"

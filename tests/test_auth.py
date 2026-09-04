@@ -1,0 +1,158 @@
+import json
+
+import pytest
+from garminconnect import GarminConnectAuthenticationError
+
+from garmin_health.auth import AuthError
+from garmin_health.auth import GarminAuthenticator
+from garmin_health.auth import LinkState
+from garmin_health.config import Settings
+from garmin_health.garmin_config import config_user
+from tests.fakes import RecordingFactory
+
+
+def make_auth(
+    settings: Settings, **client_kwargs: object
+) -> tuple[GarminAuthenticator, RecordingFactory]:
+    factory = RecordingFactory(**client_kwargs)
+    return GarminAuthenticator(settings, garmin_factory=factory), factory
+
+
+async def test_starts_not_linked_with_no_token_on_disk(settings: Settings) -> None:
+    auth, _ = make_auth(settings)
+    assert auth.status().state is LinkState.NOT_LINKED
+
+
+async def test_an_existing_token_file_means_already_linked(settings: Settings) -> None:
+    """The steady state after a restart: the token outlives the process."""
+    settings.config_dir.mkdir(parents=True, exist_ok=True)
+    settings.token_file.write_text(json.dumps({"di_refresh_token": "r"}))
+    auth, _ = make_auth(settings)
+    assert auth.status().state is LinkState.LINKED
+
+
+async def test_login_without_mfa_links_immediately(settings: Settings) -> None:
+    auth, _ = make_auth(settings, needs_mfa=False)
+    status = await auth.login("rider@example.com", "hunter2")
+    assert status.state is LinkState.LINKED
+    assert status.email == "rider@example.com"
+
+
+async def test_login_passes_return_on_mfa_to_the_constructor(settings: Settings) -> None:
+    """garminconnect takes return_on_mfa on __init__, NOT on login(). Passing it to
+    login() would be a TypeError; omitting it entirely would fall through to
+    prompt_mfa's blocking input() on stdin, which is fatal in a container."""
+    auth, factory = make_auth(settings, needs_mfa=True)
+    await auth.login("rider@example.com", "hunter2")
+    assert factory.calls[-1]["return_on_mfa"] is True
+    assert factory.calls[-1]["email"] == "rider@example.com"
+    assert "prompt_mfa" not in factory.calls[-1]
+
+
+async def test_login_persists_the_token_itself(settings: Settings) -> None:
+    """In return_on_mfa mode garminconnect's login() returns before it would ever
+    set _tokenstore_path or dump(), so nothing writes the token unless we do."""
+    auth, factory = make_auth(settings, needs_mfa=False)
+    await auth.login("rider@example.com", "hunter2")
+    assert factory.clients[-1].client.dumped_to == [str(settings.token_file)]
+    assert settings.token_file.is_file()
+
+
+async def test_mfa_challenge_moves_to_awaiting_and_does_not_write_a_token(
+    settings: Settings,
+) -> None:
+    auth, factory = make_auth(settings, needs_mfa=True)
+    status = await auth.login("rider@example.com", "hunter2")
+    assert status.state is LinkState.AWAITING_MFA
+    assert factory.clients[-1].client.dumped_to == []
+    assert not settings.token_file.exists()
+
+
+async def test_completing_mfa_links_and_writes_the_token(settings: Settings) -> None:
+    auth, factory = make_auth(settings, needs_mfa=True, mfa_code="654321")
+    await auth.login("rider@example.com", "hunter2")
+    status = await auth.complete_mfa("654321")
+    assert status.state is LinkState.LINKED
+    assert settings.token_file.is_file()
+    assert factory.clients[-1].client.dumped_to == [str(settings.token_file)]
+
+
+async def test_mfa_resumes_on_the_same_client_instance(settings: Settings) -> None:
+    """resume_login's client_state argument is ignored (client.py takes _client_state),
+    so the pending challenge only exists on the retained instance."""
+    auth, factory = make_auth(settings, needs_mfa=True)
+    await auth.login("rider@example.com", "hunter2")
+    await auth.complete_mfa("123456")
+    assert len(factory.clients) == 1
+    assert factory.clients[0].resume_calls == [({}, "123456")]
+
+
+async def test_wrong_mfa_code_requires_starting_over(settings: Settings) -> None:
+    """client.resume_login clears the pending-MFA state in a finally block, so a
+    rejected code consumes the challenge -- the owner must re-enter credentials
+    rather than retry the code against a client that can no longer accept one."""
+    auth, _ = make_auth(settings, needs_mfa=True, mfa_code="654321")
+    await auth.login("rider@example.com", "hunter2")
+    with pytest.raises(AuthError):
+        await auth.complete_mfa("000000")
+    assert auth.status().state is LinkState.NOT_LINKED
+    assert not settings.token_file.exists()
+
+
+async def test_mfa_without_a_pending_challenge_is_rejected(settings: Settings) -> None:
+    auth, _ = make_auth(settings)
+    with pytest.raises(AuthError):
+        await auth.complete_mfa("123456")
+
+
+async def test_bad_credentials_surface_as_auth_error_and_stay_unlinked(settings: Settings) -> None:
+    auth, _ = make_auth(settings, login_error=GarminConnectAuthenticationError("bad password"))
+    with pytest.raises(AuthError):
+        await auth.login("rider@example.com", "wrong")
+    assert auth.status().state is LinkState.NOT_LINKED
+    assert not settings.token_file.exists()
+
+
+async def test_login_never_writes_the_password_to_disk(settings: Settings) -> None:
+    """There is no OAuth consent flow for this API, so the app handles the owner's
+    real Garmin password. It must not outlive the request."""
+    auth, _ = make_auth(settings, needs_mfa=False)
+    await auth.login("rider@example.com", "hunter2")
+    for path in settings.app_data_dir.rglob("*"):
+        if path.is_file():
+            assert "hunter2" not in path.read_text()
+
+
+async def test_login_records_the_user_in_the_garmindb_config(settings: Settings) -> None:
+    auth, _ = make_auth(settings, needs_mfa=False)
+    await auth.login("rider@example.com", "hunter2")
+    assert config_user(settings) == "rider@example.com"
+
+
+async def test_pending_password_is_dropped_once_mfa_completes(settings: Settings) -> None:
+    auth, _ = make_auth(settings, needs_mfa=True)
+    await auth.login("rider@example.com", "hunter2")
+    await auth.complete_mfa("123456")
+    assert auth._pending is None
+
+
+async def test_unlink_removes_the_token_and_returns_to_not_linked(settings: Settings) -> None:
+    auth, _ = make_auth(settings, needs_mfa=False)
+    await auth.login("rider@example.com", "hunter2")
+    status = await auth.unlink()
+    assert status.state is LinkState.NOT_LINKED
+    assert not settings.token_file.exists()
+
+
+async def test_a_deleted_token_flips_a_linked_session_to_needs_reauth(settings: Settings) -> None:
+    """The sync loop must not keep believing it is linked after the token is gone."""
+    auth, _ = make_auth(settings, needs_mfa=False)
+    await auth.login("rider@example.com", "hunter2")
+    settings.token_file.unlink()
+    assert auth.status().state is LinkState.NEEDS_REAUTH
+
+
+async def test_status_never_exposes_the_password(settings: Settings) -> None:
+    auth, _ = make_auth(settings, needs_mfa=True)
+    await auth.login("rider@example.com", "hunter2")
+    assert "hunter2" not in json.dumps(auth.status().as_dict())

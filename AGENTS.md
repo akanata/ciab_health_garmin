@@ -10,16 +10,22 @@ maps those rows into `health_data_service` types over the spec's HTTP contract.
 
 ## Project Status
 
-**Scaffolding only — no Python source exists yet.** `plan.md` at the repo root
-is the design of record; read it before writing code. The current iteration
-covers heart rate (`specific_types.py`) and sleep (`sleep_types.py`); workouts
-are out of scope.
+`plan.md` at the repo root is the design of record; read it before writing code.
+The current iteration covers heart rate (`specific_types.py`) and sleep
+(`sleep_types.py`); workouts are out of scope.
 
-The tooling described under *Development Commands* has **not landed yet** —
-there is no `pyproject.toml`, `justfile`, or `src/` tree. Today the live
-dependency list is `requirements.txt` and the environment is the existing
-uv-created `.venv/`. Do not assume a command works because it is listed here;
-check that the file backing it exists.
+**Landed:** the toolchain (`pyproject.toml`, `uv.lock`, `justfile` — note `just`
+itself may not be installed, in which case run the underlying `uv run …`
+commands), the Garmin auth flow (`config.py`, `garmin_config.py`, `auth.py`,
+`routes/owner.py`, `app.py`), and containerization (`Dockerfile`,
+`openhost.toml`). `requirements.txt` is gone; dependencies live in
+`pyproject.toml` and are pinned by `uv.lock`.
+
+**Not built yet:** the sync engine (`sync.py`) and the entire serving layer
+(`registry.py`, `service.py`, `timezones.py`, `garmin/*`, `routes/service.py`).
+`/v1/*` therefore 404s today even though `openhost.toml` already advertises the
+service — which is safe, because the spec's client treats any non-200 from a
+provider as "this provider has nothing".
 
 ## Important References
 
@@ -52,7 +58,11 @@ Dockerfile, and test harness.
   React, no Tailwind, and no frontend build. The only HTML is the owner-facing
   `/setup` page, which should be plain server-rendered markup.
 - **Formatting:** 4-space indentation, double quotes, ruff `line-length = 100`.
-  Lint rules `E,F,B,UP,I,PLC0415`; isort `force-single-line`.
+  Lint rules `E,F,B,UP,I,PLC0415`; isort `force-single-line`. (plan.md §6 says
+  119, matching the sibling app; this file wins and `pyproject.toml` uses 100.)
+  `ruff format` reformats Python code blocks **inside Markdown**, which would
+  rewrite the snippets in `plan.md` and this file — `extend-exclude = ["*.md"]`
+  prevents that. Do not remove it.
 - **Typing:** mypy `strict = true`, plus `follow_untyped_imports = true` — the
   spec package ships full annotations but no `py.typed` marker, so without it
   every import from it degrades to `Any`.
@@ -87,6 +97,9 @@ Dependency direction is strictly
 imported only by `garmin/*`.
 
 ## Critical Guardrails & Gotchas
+
+**General**
+- ALWAYS IMPLEMENT UNIT TESTS BEFORE BUSINESS LOGIC (test-driven development).
 
 **Timezones — the highest-risk area of this project.**
 
@@ -139,8 +152,22 @@ imported only by `garmin/*`.
 **Auth.**
 
 - There is no OAuth consent flow for this API — `garminconnect` replays the
-  owner's **real Garmin password** against `sso.garmin.com`. Blank it from
-  `GarminConnectConfig.json` once `garmin_tokens.json` exists.
+  owner's **real Garmin password** against `sso.garmin.com`. We log in ourselves
+  and hand GarminDB the resulting token, so the password is never written to
+  `GarminConnectConfig.json` at all; `credentials.password` stays empty.
 - An unfinished MFA challenge lives on the `Garmin` client **instance**;
   `resume_login`'s `client_state` argument is ignored, so the object must be
   retained between the two requests.
+- `return_on_mfa` is a **constructor** argument, not a `login()` argument.
+  Omitting it falls through to `prompt_mfa`, a blocking `input()` on stdin that
+  is fatal in a container.
+- In `return_on_mfa` mode, `login()` returns early without setting
+  `client._tokenstore_path` and **never dumps the token**, and `resume_login()`
+  does not dump either. The app must call `client.client.dump(<token file>)`
+  itself, or a login that looks successful writes nothing and every later sync
+  re-prompts for MFA.
+- `client.resume_login` clears the pending-MFA state in a `finally`, so a
+  **rejected code consumes the challenge**. There is no retrying the code; the
+  owner must re-enter their credentials.
+- The token path must be exactly `<config_dir>/garmin_tokens.json`, which is
+  what `GarminConnectConfigManager.get_token_store_file()` returns.
